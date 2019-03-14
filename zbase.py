@@ -12,6 +12,12 @@ def i2b(x, n=1):
 def b2i(x):
     return int.from_bytes(x, 'big')
 
+def b2h(x):
+    return x.hex().encode('UTF-8')
+
+def h2b(x):
+    return bytes.fromhex(x.decode('UTF-8'))
+
 Z56C  = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz'
 Z58C  = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 Z85C  = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#'
@@ -77,6 +83,7 @@ def z85decode(x):
 def z256decode(x):
     return sum(Z256M[i]*(256**(len(x)-1-p)) for p,i in enumerate(x)) >> 8
 
+
 if __name__ == "__main__":
     print (hex(256**8-1))
     # BASE56 12 CHARS WITH CS ON 5 BITS
@@ -95,5 +102,5 @@ if __name__ == "__main__":
         assert x == z85decode(z85encode(x))   and True
         assert x == z256decode(z256encode(x)) and z58check(z58encode(x))
         print ('%016x' % x, z56encode(x), z85encode(x), z256encode(x), base65536.encode(i2b(x,8)))
-        
+
     #print (''.join(chr(i) for i in range(33,1024)))

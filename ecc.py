@@ -22,6 +22,12 @@ z16 = i2b(0, 16)
 def b2i(x):
     return int.from_bytes(x, 'big')
 
+def b2h(x):
+    return x.hex().encode('UTF-8')
+
+def h2b(x):
+    return bytes.fromhex(x.decode('UTF-8'))
+
 def s2b(x, n=1):
     "signed int to bytes with n padding"
     z = bytes.fromhex(PAD(hex(x + (1<<(8*n-1)))))
@@ -138,6 +144,15 @@ class ecdsa:
         s = (pow(k, n-2, n) * (H(data) + (self.privkey * r) % n)) % n
         return i2b(r, 48) + i2b(s, 48)
 
+    def compress(self, rk):
+        return i2b(rk.x, 48);
+
+    def uncompress(self, key):
+        nk = Point(c384, b2i(key), _Gy, _r)
+        t = pow(nk.x*nk.x*nk.x - 3*nk.x + _b, (_p+1)//4, _p)
+        nk.y = t if t&1 else (-t)%_p
+        return nk 
+    
     def compress56(self, rk):
         return z56encode(i2b(rk.x, 48));
 
@@ -212,9 +227,10 @@ if __name__ == '__main__':
         print (z85encode(m0), z56encode(m0))
         k.generate()
         pub = k.compress(k.pt)
-        print ('PubK', pub[:10])
+        print ('PubK', pub[:8])
         k.pt = k.uncompress(pub)
         s = k.sign(m0)
+        print ('Sign', b2h(s),       len(b2h(s))       )
         print ('Sign', z56encode(s), len(z56encode(s)) )
         print ('Sign', z85encode(s), len(z85encode(s)) )
         assert (k.verify(s, m0) and not k.verify(s, m1))
