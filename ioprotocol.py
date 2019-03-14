@@ -24,6 +24,8 @@ CERTIFICATE(134): msg(38)+sig(96)
 TRANSACTION(128): msg(32)+sig(96)
 
 3/ TODO LIST
+- Subporcess Test Automation
+- PyTorch setup
 """
 import sys, os, socket, ecc, dbm, re, hashlib, leaf
 
@@ -41,7 +43,7 @@ def verif(d):
     """
     print ('run check!')
     if len(d.keys()) > 0 and ecc.v1 not in d:           return 0x01 # head does not exists 
-    wc, wr, tc, tr = 0, 0, 0, 0
+    wc, wr, tc, tr, al = 0, 0, 0, 0, 0
     for x in d.keys():
         # Length
         lk, lv = len(x), len(d[x])
@@ -55,6 +57,8 @@ def verif(d):
             if ecc.b2h(x[:8])    not in d:              return 0x06 # src id unknown
             if ecc.b2h(d[x][:8]) not in d:              return 0x07 # dst id unknown 
         if lk == 8:
+            # Money supply
+            al += balance(x, d)
             # Dates
             dat = ecc.z8
             for i in range(ecc.b2i(d[x][:4])):
@@ -99,17 +103,20 @@ def verif(d):
                 if b != ecc.b2s(d[dx][-14:-10], 4):     return 0x0E # bad balance
     if wc != wr:                                        return 0x10 # bad wealth
     if tc != tr:                                        return 0x11 # bad counter
+    if al != 0:                                         return 0x12 # bad money supply
     return 0 # Everythink ok !
 
 def balance(x, d):
+    ""
     n = ecc.b2i(d[x][:4])
     if n == 0: return 0
     return ecc.b2s(d[x + ecc.i2b(n, 4)][-14:-10], 4)  
 
 def history(e, d):
-    o, x = [e, ], ecc.h2b(e)
-    n, bal = ecc.b2i(d[x][:4]), 0
-    o.append( ('%04d operations' % n).encode('UTF-8') )
+    ""
+    x = ecc.h2b(e)
+    n = ecc.b2i(d[x][:4])
+    o = [e + b' nb: %04d balance: %6d' % (n, balance(x, d))]
     for i in range(n):
         dx = x + ecc.i2b(i+1, 4)
         h, zx, y = ecc.b2i(d[dx][-10:]), ecc.b2h(d[dx][:8]), d[dx]
@@ -124,11 +131,12 @@ def history(e, d):
             val = ecc.b2i(d[dx][20:24])
             dat = ecc.datdecode(d[dx][8:12])
             sg = b'-'
-        o.append(b'%d %s%3d %8d H:%020X %s %s' % (i+1, sg, val, bal, h, zx, dat.encode('UTF-8')))
-    o.append(b'Balance: %6d' % bal)
+        o.append(b'%03d %s%3d %8d H:%020X %s %s' % (i+1, sg, val, bal, h, zx, dat.encode('UTF-8')))
+    o.append(b'Balance: %6d' % balance(x, d) )
     return b'\n'.join(o)
 
 def list(d):
+    ""
     lu, lo = [x for x in d.keys() if len(x) == 16], []
     for p, i in enumerate(lu):
         x = ecc.h2b(i)
@@ -154,6 +162,7 @@ def register(e, d):
     return zid + b' registered'
 
 def invoice(e, d):
+    ""
     return b'invoice'
 
 def transaction(e, d):
@@ -253,19 +262,32 @@ def server(db, ip):
             s.sendto(o, addr)
     
 def get_my(sel):
+    ""
     if os.path.isfile('lpub'):
         with open('lpub') as f:
             all = [leaf.reg.v.group(1) for l in f if leaf.reg(re.match('%s\s+(\S{16})' % sel, l))]
             return all[0].encode('UTF-8') if all else b''
     else: return b''
-        
+
+def gene(bmy, dst, pld, d):
+    ""
+    if bmy in d.keys():
+        pk, sk = bmy + d[bmy][:40], d[bmy][40:]
+        k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
+        msg = pk[:8] + dst + ecc.datencode() + ecc.z8 + pld + ecc.z8 
+        return msg + k.sign(msg)
+    else:
+        print ('you do not own that key')
+        return b''
+    
 def client(db, ip):
     " Simulate smart-phone with strong authentication "
     my = b''
     while True:
         if my == b'': my = get_my('1')
-        cmd, req = input('%s >' % my.decode('UTF-8')), b''
-        if re.match('(r|reg|register)\s*$', cmd): # 48
+        cmd, req, bmy = input('%s >' % my.decode('UTF-8')), b'', ecc.h2b(my)
+        if leaf.reg(re.match('(r|reg|register)\s*(\w+@\w+\.\w+)\s*$', cmd)): # 48
+            #print (leaf.reg.v.group(2))
             k.generate()
             sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
             req = pk
@@ -275,34 +297,23 @@ def client(db, ip):
         elif re.match('(h|hist|history)\s*$',       cmd): req = my
         elif leaf.reg(re.match('(my|)\s*(\d{1,2})\s*$', cmd)): my = get_my(leaf.reg.v.group(2))
         elif leaf.reg(re.match('(p|pay)\s*(\d{1,2})\s+(\d{1,3})\s*$', cmd)): # 136
-            bmy = ecc.h2b(my)
             with dbm.open(db) as d:
-                if bmy in d.keys():
-                    pk, sk, val = bmy + d[bmy][:40], d[bmy][40:], leaf.reg.v.group(3)
-                    src, dst = pk[:8], ecc.h2b(get_my(leaf.reg.v.group(2)))
-                    k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
-                    msg = src + dst + ecc.datencode() + ecc.z8 + ecc.i2b(int(val), 4) + ecc.z8 # len:40
-                    req = msg + k.sign(msg)
+                pld = ecc.i2b(int(leaf.reg.v.group(3)), 4)
+                req = gene(bmy, ecc.h2b(get_my(leaf.reg.v.group(2))), pld, d)
         elif leaf.reg(re.match('(c|crt|cert)\s*(\d{1,2})\s*$', cmd)): # len:142
-            bmy = ecc.h2b(my)
             with dbm.open(db) as d:
-                if bmy in d.keys():
-                    pk, sk = bmy + d[bmy][:40], d[bmy][40:]
-                    src, dst = pk[:8], ecc.h2b(get_my(leaf.reg.v.group(2)))
-                    k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
-                    msg = src + dst + ecc.datencode() + ecc.z8 + ecc.z10 + ecc.z8 # len 46
-                    req = msg + k.sign(msg)
+                req = gene(bmy, ecc.h2b(get_my(leaf.reg.v.group(2))), ecc.z10, d)
         elif cmd == 'end':
             s.close()
             break
         if req:
             s.sendto(req, (ip, PORT))
-            data, addr = s.recvfrom(1024)
+            data, addr = s.recvfrom(2048)
             if data:
                 print (data.decode('UTF-8'))
                 if req == b'l':
                     with open('lpub', 'w') as lp: lp.write(data.decode('UTF-8'))
-
+                    
 import readline, subprocess
 
 if __name__ == "__main__":
