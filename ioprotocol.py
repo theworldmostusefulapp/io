@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 """
-IO-PROTOCOL over UDP (client and server) v0.1
+IO-PROTOCOL over UDP/IP (client and server) v0.1
 
 1/ IO DB FORMAT
 DBHEAD: 01:016 IO_VER(1)       : TOTAL_NC(8)  WEALTH(8)      
@@ -19,35 +19,49 @@ INVOIC: 12:148 SRC(8) N_SRC(4) : DST(8) DAT(4) LATLONG(8) HIST(16)  H(10) SIG(96
         12:256                                            HIST(130)              
 
 2/ API 
-REGISTER(48):     pk(48)
-CERTIFICATE(134): msg(38)+sig(96)
-TRANSACTION(128): msg(32)+sig(96)
+REGISTER(48):     email + pk(48)
+CERTIFICATE(136): msg(40)+sig(96)
+TRANSACTION(142): msg(46)+sig(96)
 
 3/ TODO LIST
 - Subporcess Test Automation
 - PyTorch setup
+- differential verification
+- follow certification web of trust
+- HTTP(S) encapsulation
 """
 import sys, os, socket, ecc, dbm, re, hashlib, leaf
 
+# PROVISION
 #import torch
 #print (torch.rand(5, 3))
 #import tensorflow
+#import subprocess
 
-s, k, MAXB, PORT = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ecc.ecdsa(), 1000, 7800
+s, k, MAXB = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ecc.ecdsa(), 1000
+PORT = 7800
+#PORT = 992 # temporary use Telnet over TLS/SSL
 NS, ND, NC = 26, 142, 148
 
 def verif(d):
     """
-    make it differential
     check certification !
     """
     print ('run check!')
     if len(d.keys()) > 0 and ecc.v1 not in d:           return 0x01 # head does not exists 
     wc, wr, tc, tr, al = 0, 0, 0, 0, 0
+
+    lo = []
+    for i in [x for x in d.keys() if len(x) == 16]:
+        x = ecc.h2b(i)
+        if ecc.b2i(d[x][4:]) > ecc.datint(): lo.append(x)
+    #print (lo)
+    #find the root
+    
     for x in d.keys():
         # Length
         lk, lv = len(x), len(d[x])
-        if lk == 1: wr, tr = ecc.b2i(d[x][8:]), ecc.b2i(d[x][:8])
+        if lk == 1: wr, tr = ecc.b2i(d[x][8:16]), ecc.b2i(d[x][:8])
         if lk == 1  and lv != 16:                       return 0x02 # bad length head
         if lk == 8  and lv !=  8:                       return 0x03 # bad length id head 
         if lk == 12 and lv not in (NS, ND, NC):         return 0x05 # bad length operation
@@ -141,19 +155,19 @@ def list(d):
     for p, i in enumerate(lu):
         x = ecc.h2b(i)
         ct = (' %6d' % balance(x, d)).encode('UTF-8') if ecc.b2i(d[x][4:]) > ecc.datint() else b''
-        lo.append( ('%d\t' % (p+1)).encode('UTF-8') + i + ct)
+        perso = b'' # provision
+        lo.append( ('%d\t' % (p+1)).encode('UTF-8') + i + ct + perso)
     return b'\n'.join(lo)   
 
 def register(e, d):
-    """
-    """
+    ""
     if len(d.keys()) == 0: d[ecc.v1] = ecc.z8 + ecc.z8 # INIT
     zid, dl = ecc.b2h(e[:8]), ecc.add1year(ecc.datencode()) if len(d.keys()) == 1 else ecc.z4
     for i in range(1, 16):
         if sum([1 for x in d.keys() if len(x) == 16]) < (16**i)//2: break
     for x in d.keys():
         if len(x) == 16 and x[:i] == zid[:i]:
-            return ('%s COLISION [%d] -> re-run generation !' % (zid, i)).encode('UTF-8')
+            return ('COLISION %s [%d] -> re-run generation !' % (zid, i)).encode('UTF-8')
     if zid in d: return b'COLISION!'
     # START WRITING
     d[e[:8]] = ecc.z4 + dl
@@ -233,7 +247,7 @@ def certificate(e, d):
         d[dst] = d[dst][:4] + green
         d[src] = ecc.i2b(ns, 4) + d[src][4:]       
         d[src  + ecc.i2b(ns, 4)] = sm + hashlib.sha1(src + sm + nhs).digest()[:10]
-        d[ecc.v1] = ecc.i2b(ecc.b2i(d[ecc.v1][:8]) + 1, 8) + d[ecc.v1][8:]
+        d[ecc.v1] = ecc.i2b(ecc.b2i(d[ecc.v1][:8]) + 1, 8) + d[ecc.v1][8:16]
         return b'CERTIFICATION by ' + zx
     # STOP WRITING
     else:                                                               return b'Error request'
@@ -250,19 +264,19 @@ def server(db, ip):
         (data, addr), o = s.recvfrom(1024), b''
         with dbm.open(db, 'c') as d:
             if       data  == b'l': o = list(d)
-            elif leaf.reg(re.match(b'(\S+)\s', data)):
+            elif leaf.reg(re.match(b'(\w{,20}@\w{,20}\.\w{,3})\s', data)):
                 mel = leaf.reg.v.group(1)
                 ky = data[len(mel)+1:]
                 with dbm.open('mel', 'c') as m:
-                    if mel not in m and len(ky) == 48: o = register(ky, d)                    
-                    m[mel] = ecc.b2h(ky[:8])
+                    if mel not in m and len(ky) == 48: o = register(ky, d)
+                    if o[:8] != b'COLISION': m[mel] = ecc.b2h(ky[:8])
             elif len(data) ==   16: o = history    (data, d)
             elif len(data) ==  136: o = transaction(data, d)
             elif len(data) ==  142: o = certificate(data, d)
             elif len(data) >=  144 and len(data) <= 256: o = invoice(data, d)
             elif     data  == b'v':
                 err = verif(d)
-                if err: o = ('ERROR %02X' % err).encode('UTF-8') 
+                if err: o = ('ERROR %02X' % err).encode('UTF-8')
             else: o = b'command not found!'
             s.sendto(o, addr)
     
@@ -279,7 +293,7 @@ def gene(bmy, dst, pld, d):
     if bmy in d.keys():
         pk, sk = bmy + d[bmy][:40], d[bmy][40:]
         k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
-        msg = pk[:8] + dst + ecc.datencode() + ecc.z8 + pld + ecc.z8 
+        msg = pk[:8] + dst + ecc.datencode() + ecc.z8 + pld + ecc.z8
         return msg + k.sign(msg)
     else:
         print ('you do not own that key')
@@ -314,6 +328,10 @@ def client(db, ip, unik=False):
         elif leaf.reg(re.match('(c|crt|cert)\s*(\d{1,2})\s*$', cmd)): # len:142
             with dbm.open(db) as d:
                 req = gene(bmy, ecc.h2b(get_my(leaf.reg.v.group(2))), ecc.z10, d)
+        elif re.match('(m|my)\s*$', cmd):
+            with dbm.open(db) as d:
+                for x in d.keys(): print (ecc.b2h(x).decode('UTF-8'))
+            req = b''
         elif cmd == 'end':
             s.close()
             break
@@ -325,14 +343,9 @@ def client(db, ip, unik=False):
                 if req == b'l':
                     with open('lpub', 'w') as lp: lp.write(data.decode('UTF-8'))
                     
-import readline, subprocess
+import readline
 
 if __name__ == "__main__":
-    # client('local', '127.0.0.1')
-    # server('base' , '127.0.0.1')
-    client('local', sys.argv[1], True) if len(sys.argv) == 2 else server('base', leaf.ip())
-
-    #print(p.stdout.readlines())
-
+    client('local', sys.argv[1], False) if len(sys.argv) == 2 else server('base', leaf.ip())
     
 # end
