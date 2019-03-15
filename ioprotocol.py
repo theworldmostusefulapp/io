@@ -346,6 +346,7 @@ def client(db, ip, unik=False):
     h       -> display history for current body
     m       -> list all client ids (usually one if flag unik is True)
     """
+    print ('IO Client\nType ? for help')
     my = b''
     while True:
         if my == b'': my = get_my('1')

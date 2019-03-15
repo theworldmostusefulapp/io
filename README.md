@@ -32,7 +32,7 @@ Each account is reachable with a smartphone that store the private cryptographic
 - something of your body (face analysis, fingerprint,...)
 - something you know (PIN, password)
 
-Nobody can pay with your account, even the CIA, unless you give him your phone, your finger and your password ;-)
+Nobody can pay with your account, even the NSA, unless you give him your phone, your finger and your password ;-)
 Nobody can prevent you to pay to the person of your choice
 
 The IO protocal also manages incomes produced by objects/robots.
@@ -44,13 +44,22 @@ This solves the problem of capital bad distribution among people in the world, b
 
 ## Usage
 
-```python
-blabla
+Launch the server in background after checking the port 7800 is open for UDP
 ```
+>python3 ioprotocol.py &
+```
+The server ip address is returned
+
+On one or several another PCs or smartphones, launch a client with the server address; for instance :
+
+```
+>python3 ioprotocol.py 192.168.25.20
+```
+Follow only instructions
 
 ## Contact
 
-Please, contact me for any question or suggestion of IOprotocol
+Please, contact me for any question or suggestion on the IO Protocol
 
 You can also try to hack this protocol, you will be rewarded ;-)
 
