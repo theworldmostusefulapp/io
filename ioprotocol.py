@@ -5,10 +5,12 @@ IO-PROTOCOL over UDP/IP (client and server) v0.1
 
 1/ IO DB FORMAT
 DBHEAD: 01:016 IO_VER(1)       : TOTAL_NC(8)  WEALTH(8)      
+S_KEYS: 05:096 SERVER(5)       : SERVER_PUB_KEY(48) SERVER_PRIVATE_KEY(48)
+
 S_HEAD: 08:008 SRC(8)          : LST_N_SRC(4) DEADLINE_SRC(4)
 D_HEAD: 08:008 DST(8)          : LST_N_DST(4) DEADLINE_DST(4)
 
-PUBKEY: 16:080     ID(16)      : PUBLIC_KEY_END(80)[base16]
+PUBKEY: 16:080 ID(16)          : PUBLIC_KEY_END(80)[base16]
 
 TRANSATION 
 TR_SRC: 12:026 SRC(8) N_SRC(4) : DST(8) N_DST(4)                                   BAL(4) H(10)
@@ -24,7 +26,7 @@ CERTIFICATE(136): msg(40)+sig(96)
 TRANSACTION(142): msg(46)+sig(96)
 
 3/ TODO LIST
-- Subporcess Test Automation
+- Subprocess Test Automation
 - PyTorch setup
 - differential verification
 - follow certification web of trust
@@ -34,8 +36,6 @@ import sys, os, socket, ecc, dbm, re, hashlib, leaf
 
 # PROVISION
 #import torch
-#print (torch.rand(5, 3))
-#import tensorflow
 #import subprocess
 
 s, k, MAXB = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ecc.ecdsa(), 1000
@@ -63,13 +63,14 @@ def verif(d):
         lk, lv = len(x), len(d[x])
         if lk == 1: wr, tr = ecc.b2i(d[x][8:16]), ecc.b2i(d[x][:8])
         if lk == 1  and lv != 16:                       return 0x02 # bad length head
-        if lk == 8  and lv !=  8:                       return 0x03 # bad length id head 
+        if lk == 5  and lv != 96:                       return 0x03 # bad length server id
+        if lk == 8  and lv !=  8:                       return 0x04 # bad length id head 
         if lk == 12 and lv not in (NS, ND, NC):         return 0x05 # bad length operation
-        if lk == 16 and lv != 80:                       return 0x04 # bad length pub key
+        if lk == 16 and lv != 80:                       return 0x06 # bad length pub key
         # Public keys
         if lk == 12:
-            if ecc.b2h(x[:8])    not in d:              return 0x06 # src id unknown
-            if ecc.b2h(d[x][:8]) not in d:              return 0x07 # dst id unknown 
+            if ecc.b2h(x[:8])    not in d:              return 0x07 # src id unknown
+            if ecc.b2h(d[x][:8]) not in d:              return 0x08 # dst id unknown 
         if lk == 8:
             # Money supply
             al += balance(x, d)
@@ -78,10 +79,10 @@ def verif(d):
             for i in range(ecc.b2i(d[x][:4])):
                 dx = x + ecc.i2b(i+1, 4)
                 if len(d[dx]) in (ND, NC):
-                    if    d[dx][8:12] <= dat:           return 0x08 # bad date increase
+                    if    d[dx][8:12] <= dat:           return 0x09 # bad date increase
                     dat = d[dx][8:12]
                 if len(d[dx]) == ND:
-                    if dat > d[x][4:]:                  return 0x09 # invalid date/dead line
+                    if dat > d[x][4:]:                  return 0x0A # invalid date/dead line
             # Signatures
             for i in range(ecc.b2i(d[x][:4])):
                 dx = x + ecc.i2b(i+1, 4)
@@ -89,16 +90,16 @@ def verif(d):
                 if len(d[dx]) == ND: src, dst = d[dx][:8], dx[:8]
                 if len(d[dx]) in (NC, ND):
                     zx = ecc.b2h(src)
-                    if zx not in d.keys():              return 0x0A # Error public key                    
+                    if zx not in d.keys():              return 0x0B # Error public key                    
                     msg, sig = src + dst + d[dx][8:-110], d[dx][-110:-14]
                     k.pt = k.uncompress(ecc.h2b(zx + d[zx]))
-                    if not k.verify(sig, msg):          return 0x0B # bad signature
+                    if not k.verify(sig, msg):          return 0x0C # bad signature
             # Hash
             h = ecc.z10
             for i in range(ecc.b2i(d[x][:4])):
                 dx = x + ecc.i2b(i+1, 4)
                 h = hashlib.sha1(x + d[dx][:-10] + h).digest()[:10]
-                if h != d[dx][-10:]:                    return 0x0C # bad hash
+                if h != d[dx][-10:]:                    return 0x0D # bad hash
             # Wealth
             for i in range(ecc.b2i(d[x][:4])):
                 dx = x + ecc.i2b(i+1, 4)
@@ -111,10 +112,10 @@ def verif(d):
             b = 0
             for i in range(ecc.b2i(d[x][:4])):
                 dx = x + ecc.i2b(i+1, 4)
-                if dx not in d:                         return 0x0D # missing transaction
+                if dx not in d:                         return 0x0E # missing transaction
                 if len(d[dx])   == ND: b += ecc.b2i(d[x + ecc.i2b(i+1, 4)][20:24])
                 elif len(d[dx]) == NS: b -= ecc.b2i(d[d[dx][:12]][20:24])
-                if b != ecc.b2s(d[dx][-14:-10], 4):     return 0x0E # bad balance
+                if b != ecc.b2s(d[dx][-14:-10], 4):     return 0x0F # bad balance
     if wc != wr:                                        return 0x10 # bad wealth
     if tc != tr:                                        return 0x11 # bad counter
     if al != 0:                                         return 0x12 # bad money supply
@@ -125,6 +126,20 @@ def balance(x, d):
     n = ecc.b2i(d[x][:4])
     if n == 0: return 0
     return ecc.b2s(d[x + ecc.i2b(n, 4)][-14:-10], 4)  
+
+def proof(x, d):
+    ""
+    if b'SERVER' in d.keys():
+        pk, sk = d[b'SERVER'][:48], d[b'SERVER'][48:]
+        k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
+        dat = ecc.datdecode(ecc.datencode()).encode('UTF-8')
+        msg = b'%s %d %s' % (ecc.b2h(x), balance(x, d), dat)
+        return ecc.z85encode(k.sign(msg)) + msg if not verif(d) else b'error'
+    return b''
+
+def server_id(d):
+    ""
+    return ecc.z85encode(d[b'SERVER'][:48]) if b'SERVER' in d.keys() else b''
 
 def history(e, d):
     ""
@@ -149,7 +164,7 @@ def history(e, d):
     o.append(b'Balance: %6d' % balance(x, d) )
     return b'\n'.join(o)
 
-def list(d):
+def lst(d):
     ""
     lu, lo = [x for x in d.keys() if len(x) == 16], []
     for p, i in enumerate(lu):
@@ -161,8 +176,7 @@ def list(d):
 
 def register(e, d):
     ""
-    if len(d.keys()) == 0: d[ecc.v1] = ecc.z8 + ecc.z8 # INIT
-    zid, dl = ecc.b2h(e[:8]), ecc.add1year(ecc.datencode()) if len(d.keys()) == 1 else ecc.z4
+    zid, dl = ecc.b2h(e[:8]), ecc.add1year(ecc.datencode()) if len(d.keys()) == 2 else ecc.z4
     for i in range(1, 16):
         if sum([1 for x in d.keys() if len(x) == 16]) < (16**i)//2: break
     for x in d.keys():
@@ -256,20 +270,28 @@ def server(db, ip):
     """ 
     """
     s.bind((ip, PORT))
-    print ('IO-server on %s' % ip)    
+    print ('IO-server on %s' % ip)
     with dbm.open(db, 'c') as d:
+        if len(d.keys()) == 0:
+            k.generate()
+            sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
+            d[b'SERVER'] = pk + sk
+            d[ecc.v1] = ecc.z8 + ecc.z8
+        print ('Server Public ID: ' + server_id(d).decode('UTF-8'))
         if ecc.v1 in d.keys():
             print ('Wealth: %d [%d operations]' % (ecc.b2i(d[ecc.v1][8:]),ecc.b2i(d[ecc.v1][:8]) ))   
     while True:
         (data, addr), o = s.recvfrom(1024), b''
         with dbm.open(db, 'c') as d:
-            if       data  == b'l': o = list(d)
+            if       data  == b'l': o = lst(d)
+            elif     data  == b's': o = server_id(d)
             elif leaf.reg(re.match(b'(\w{,20}@\w{,20}\.\w{,3})\s', data)):
                 mel = leaf.reg.v.group(1)
                 ky = data[len(mel)+1:]
                 with dbm.open('mel', 'c') as m:
                     if mel not in m and len(ky) == 48: o = register(ky, d)
                     if o[:8] != b'COLISION': m[mel] = ecc.b2h(ky[:8])
+            elif len(data) ==    8: o = proof      (data, d)
             elif len(data) ==   16: o = history    (data, d)
             elif len(data) ==  136: o = transaction(data, d)
             elif len(data) ==  142: o = certificate(data, d)
@@ -307,9 +329,23 @@ def genkey(mel, unik, d):
     sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
     d[pk[:8]] = pk[8:] + sk
     return mel + b' ' + pk
-    
+
 def client(db, ip, unik=False):
-    " Simulate smart-phone with strong authentication "
+    """ 
+    IO CLIENT:
+    Simulate smart-phone with strong authentication 
+    Commands:
+    l       -> list index of all registered bodies
+    r email -> register a new body with a new email
+    <num>   -> select <num> as current body
+    v       -> verify all the database
+    s       -> return server public id
+    o       -> return proof of balance at current time, to give to offline objects
+    c <num> -> request certificate to <num> or generate certificate for <num>
+    p <num> <val> -> pay <num> body <val> amount of leaf
+    h       -> display history for current body
+    m       -> list all client ids (usually one if flag unik is True)
+    """
     my = b''
     while True:
         if my == b'': my = get_my('1')
@@ -319,7 +355,10 @@ def client(db, ip, unik=False):
                 req = genkey(leaf.reg.v.group(2).encode('UTF-8'), unik, d)
         elif re.match('(v|verif|verification)\s*$', cmd): req = b'v'
         elif re.match('(l|ls|list)\s*$',            cmd): req = b'l'
+        elif re.match('(s|server)\s*$',             cmd): req = b's'
         elif re.match('(h|hist|history)\s*$',       cmd): req = my
+        elif re.match('(o|proof)\s*$',              cmd): req = bmy
+        elif re.match('(\?|help)\s*$',              cmd): req = b''; print (__doc__, client.__doc__)
         elif leaf.reg(re.match('(my|)\s*(\d{1,2})\s*$', cmd)): my = get_my(leaf.reg.v.group(2))
         elif leaf.reg(re.match('(p|pay)\s*(\d{1,2})\s+(\d{1,3})\s*$', cmd)): # 136
             with dbm.open(db) as d:
