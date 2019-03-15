@@ -250,8 +250,13 @@ def server(db, ip):
         (data, addr), o = s.recvfrom(1024), b''
         with dbm.open(db, 'c') as d:
             if       data  == b'l': o = list(d)
+            elif leaf.reg(re.match(b'(\S+)\s', data)):
+                mel = leaf.reg.v.group(1)
+                ky = data[len(mel)+1:]
+                with dbm.open('mel', 'c') as m:
+                    if mel not in m and len(ky) == 48: o = register(ky, d)                    
+                    m[mel] = ecc.b2h(ky[:8])
             elif len(data) ==   16: o = history    (data, d)
-            elif len(data) ==   48: o = register   (data, d)
             elif len(data) ==  136: o = transaction(data, d)
             elif len(data) ==  142: o = certificate(data, d)
             elif len(data) >=  144 and len(data) <= 256: o = invoice(data, d)
@@ -279,19 +284,25 @@ def gene(bmy, dst, pld, d):
     else:
         print ('you do not own that key')
         return b''
+
+def genkey(mel, unik, d):
+    if len(d.keys()) > 0 and unik:
+        print ('key already defined')
+        return b''
+    k.generate()
+    sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
+    d[pk[:8]] = pk[8:] + sk
+    return mel + b' ' + pk
     
-def client(db, ip):
+def client(db, ip, unik=False):
     " Simulate smart-phone with strong authentication "
     my = b''
     while True:
         if my == b'': my = get_my('1')
         cmd, req, bmy = input('%s >' % my.decode('UTF-8')), b'', ecc.h2b(my)
         if leaf.reg(re.match('(r|reg|register)\s*(\w+@\w+\.\w+)\s*$', cmd)): # 48
-            #print (leaf.reg.v.group(2))
-            k.generate()
-            sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
-            req = pk
-            with dbm.open(db, 'c') as d: d[pk[:8]] = pk[8:] + sk
+            with dbm.open(db, 'c') as d:
+                req = genkey(leaf.reg.v.group(2).encode('UTF-8'), unik, d)
         elif re.match('(v|verif|verification)\s*$', cmd): req = b'v'
         elif re.match('(l|ls|list)\s*$',            cmd): req = b'l'
         elif re.match('(h|hist|history)\s*$',       cmd): req = my
@@ -319,7 +330,7 @@ import readline, subprocess
 if __name__ == "__main__":
     # client('local', '127.0.0.1')
     # server('base' , '127.0.0.1')
-    client('local', sys.argv[1]) if len(sys.argv) == 2 else server('base', leaf.ip())
+    client('local', sys.argv[1], True) if len(sys.argv) == 2 else server('base', leaf.ip())
 
     #print(p.stdout.readlines())
 
