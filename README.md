@@ -55,7 +55,7 @@ On one or several another PCs or smartphones, launch a client with the server ad
 ```
 >python3 ioprotocol.py 192.168.25.20
 ```
-Follow only instructions
+Then you can generate keys, request for certificate and pay
 
 ## Contact
 
