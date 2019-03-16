@@ -3,7 +3,15 @@
 """
 IO-PROTOCOL over UDP/IP (client and server) v0.1
 
-1/ IO DB FORMAT
+1/ IO-PROTOCOL is between three parts:
+- Humans (represented by their smartphone)
+- Objects/Robots/IAs with a limited memory and only local (BLE,NFC) connection
+- Internet servers 
+
+An UDP socket on port 7800 links Human (client) and Internet  (server)
+An UDP socket on port 7801 links Human (client) and Object (resourcce)  
+
+2/ IO DB FORMAT
 DBHEAD: 01:016 IO_VER(1)       : TOTAL_NC(8)  WEALTH(8)      
 S_KEYS: 05:096 SERVER(5)       : SERVER_PUB_KEY(48) SERVER_PRIVATE_KEY(48)
 
@@ -20,27 +28,27 @@ CERTIF: 12:148 SRC(8) N_SRC(4) : DST(8)   DAT(4) LATLONG(8) PLD(10) REF(8) SIG(9
 INVOIC: 12:148 SRC(8) N_SRC(4) : DST(8) DAT(4) LATLONG(8) HIST(16)  H(10) SIG(96)
         12:256                                            HIST(130)              
 
-2/ API 
+3/ API 
 REGISTER(48):     email + pk(48)
 CERTIFICATE(136): msg(40)+sig(96)
 TRANSACTION(142): msg(46)+sig(96)
 
-3/ TODO LIST
+4/ TODO LIST
 - Subprocess Test Automation
 - PyTorch setup
 - differential verification
 - follow certification web of trust
 - HTTP(S) encapsulation
 """
-import sys, os, socket, ecc, dbm, re, hashlib, leaf
+import sys, os, socket, ecc, dbm, re, hashlib, leaf, threading, time, random
+import readline # for command history
 
 # PROVISION
 #import torch
 #import subprocess
 
 s, k, MAXB = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ecc.ecdsa(), 1000
-PORT = 7800
-#PORT = 992 # temporary use Telnet over TLS/SSL
+PORT1, PORT2 = 7800, 7801
 NS, ND, NC = 26, 142, 148
 
 def verif(d):
@@ -269,7 +277,7 @@ def certificate(e, d):
 def server(db, ip):
     """ 
     """
-    s.bind((ip, PORT))
+    s.bind((ip, PORT1))
     print ('IO-server on %s' % ip)
     with dbm.open(db, 'c') as d:
         if len(d.keys()) == 0:
@@ -277,6 +285,7 @@ def server(db, ip):
             sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
             d[b'SERVER'] = pk + sk
             d[ecc.v1] = ecc.z8 + ecc.z8
+            with open('server_pk', 'w') as f: f.write(ecc.z85encode(pk).decode('UTF-8'))
         print ('Server Public ID: ' + server_id(d).decode('UTF-8'))
         if ecc.v1 in d.keys():
             print ('Wealth: %d [%d operations]' % (ecc.b2i(d[ecc.v1][8:]),ecc.b2i(d[ecc.v1][:8]) ))   
@@ -360,6 +369,8 @@ def client(db, ip, unik=False):
         elif re.match('(h|hist|history)\s*$',       cmd): req = my
         elif re.match('(o|proof)\s*$',              cmd): req = bmy
         elif re.match('(\?|help)\s*$',              cmd): req = b''; print (__doc__, client.__doc__)
+        elif re.match('(b|begin|start)\s*$',        cmd): req = b''; start_access()
+        elif re.match('(e|end|stop)\s*$',           cmd): req = b''; stop_access()
         elif leaf.reg(re.match('(my|)\s*(\d{1,2})\s*$', cmd)): my = get_my(leaf.reg.v.group(2))
         elif leaf.reg(re.match('(p|pay)\s*(\d{1,2})\s+(\d{1,3})\s*$', cmd)): # 136
             with dbm.open(db) as d:
@@ -368,24 +379,108 @@ def client(db, ip, unik=False):
         elif leaf.reg(re.match('(c|crt|cert)\s*(\d{1,2})\s*$', cmd)): # len:142
             with dbm.open(db) as d:
                 req = gene(bmy, ecc.h2b(get_my(leaf.reg.v.group(2))), ecc.z10, d)
-        elif re.match('(m|my)\s*$', cmd):
+        elif re.match('(m|my)\s*$',                 cmd):
             with dbm.open(db) as d:
                 for x in d.keys(): print (ecc.b2h(x).decode('UTF-8'))
             req = b''
-        elif cmd == 'end':
+        elif re.match('(q|quit)\s*$',               cmd):
             s.close()
             break
         if req:
-            s.sendto(req, (ip, PORT))
+            s.sendto(req, (ip, PORT1))
             data, addr = s.recvfrom(2048)
             if data:
                 print (data.decode('UTF-8'))
                 if req == b'l':
-                    with open('lpub', 'w') as lp: lp.write(data.decode('UTF-8'))
-                    
-import readline
+                    with open('lpub', 'w') as f: f.write(data.decode('UTF-8'))
+                if req == bmy:
+                    with open('proof', 'w') as f: f.write(data.decode('UTF-8'))
 
+def access_tcp():
+    ""
+    sr = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    with open('proof') as f: pr = f.read()
+    sr.connect((leaf.ip(), PORT2))
+    sr.send(pr.encode('UTF-8'))
+    #data = sr.recv(2048)
+    #if data: print (data.decode('UTF-8'))
+
+        
+def resource_tcp(db, ip):
+    ""
+    sr = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print ('Intelligent Object')
+    with dbm.open(db, 'c') as d:
+        if len(d.keys()) == 0:
+            k.generate()
+            sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
+            d[pk] = sk
+    sr.bind((ip, PORT2))
+    while True:
+        sr.listen(5)
+        cli, addr = sr.accept()
+        data = cli.recv(1024)
+        sig, msg = ecc.z85decode(data[:120]), data[120:]
+        with open('server_pk') as f: pk = f.read()
+        k.pt = k.uncompress(ecc.z85decode(pk.encode('UTF-8')))
+        if k.verify(sig, msg):
+            print ('ok')
+            #sr.send(b'ok')
+            #start time counting
+        else:
+            print ('ko')
+            #sr.send(b'bad signature')
+
+def start_access():
+    ""
+    t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    with open('proof') as f: pr = f.read()
+    t.sendto(pr.encode('UTF-8'), (leaf.ip(), PORT2))
+    data, addr = t.recvfrom(2048)
+    if data: print (data.decode('UTF-8'))
+
+def stop_access():
+    ""
+    t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    t.sendto(b'stop', (leaf.ip(), PORT2))
+    data, addr = t.recvfrom(2048)
+    if data: print (data.decode('UTF-8'))
+    
+        
+def resource(db, ip):
+    ""
+    t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print ('Intelligent Object (socket open)')
+    with dbm.open(db, 'c') as d:
+        if len(d.keys()) == 0:
+            k.generate()
+            sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
+            d[pk] = sk
+    t.bind((ip, PORT2))
+    while True:
+        (data, addr) = t.recvfrom(1024)
+        with open('server_pk') as f: pk = f.read()
+        k.pt = k.uncompress(ecc.z85decode(pk.encode('UTF-8')))
+        if len(data)>130:
+            sig, msg = ecc.z85decode(data[:120]), data[120:]
+            if k.verify(sig, msg):
+                cod = random.randrange(10000)
+                t.sendto(b'start counting (code:%04d)' % cod, addr)
+                dat = time.time()
+            else:
+                t.sendto(b'error on signature', addr)
+        elif len(data) == 4:
+            t.sendto(b'stop counting', addr)
+            print (' %d secondes' % int(time.time()-dat))
+        else:
+            t.sendto(b'error', addr)
+        
 if __name__ == "__main__":
-    client('local', sys.argv[1], False) if len(sys.argv) == 2 else server('base', leaf.ip())
+    if   len(sys.argv) == 3:
+        resource('mem', sys.argv[2])
+    elif len(sys.argv) == 2:
+        client('local', sys.argv[1], False)
+    else:
+        server('base', leaf.ip())
     
 # end
