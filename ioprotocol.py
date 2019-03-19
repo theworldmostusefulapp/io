@@ -186,6 +186,14 @@ def list_humans(d):
         lo.append( ('%d\t' % (p+1)).encode('UTF-8') + i + ct + perso)
     return b'\n'.join(lo)   
 
+def candidate(data, d):
+    ky, mel , o = data[:48], data[48:], b''
+    with dbm.open('mel', 'c') as m:
+        if mel not in m:
+            o = register(ky, d)
+            if o[:8] != b'COLISION': m[mel] = ecc.b2h(ky[:8])
+    return o
+
 def register(e, d):
     ""
     zid, dl = ecc.b2h(e[:8]), ecc.add1year(ecc.datencode()) if len(d.keys()) == 2 else ecc.z4
@@ -300,18 +308,13 @@ def server(db, ip):
     while True:
         (data, addr), o = s.recvfrom(1024), b''
         with dbm.open(db, 'c') as d:
-            print (data)
-            if   data == b'v' and len(data) ==  1: o = b'Error %02X' % verif(d)
-            elif data == b'l' and len(data) ==  1: o = list_humans(d)
-            elif data == b's' and len(data) ==  1: o = server_id(d)
-            elif leaf.reg(re.match(b'(\w{,20}@\w{,20}\.\w{,3})\s', data)):
-                mel = leaf.reg.v.group(1)
-                ky = data[len(mel)+1:]
-                with dbm.open('mel', 'c') as m:
-                    if mel not in m and len(ky) == 48: o = register(ky, d)
-                    if o[:8] != b'COLISION': m[mel] = ecc.b2h(ky[:8])
+            if len(data) == 1:
+                if   data == b'v': o = b'Error %02X' % verif(d)
+                elif data == b'l': o = list_humans(d)
+                elif data == b's': o = server_id(d)
             elif len(data) ==    8: o = proof      (data, d)
             elif len(data) ==   16: o = history    (data, d)
+            elif len(data) ==   93: o = candidate  (data, d)
             elif len(data) ==  136: o = transaction(data, d)
             elif len(data) ==  142: o = certificate(data, d)
             elif len(data) >=  144 and len(data) <= 256: o = invoice(data, d)
@@ -339,14 +342,14 @@ def gene(bmy, dst, pld, d):
         return b''
 
 def genkey(mel, unik, d):
-    k = ecc.ecdsa()
     if len(d.keys()) > 0 and unik:
         print ('key already defined')
         return b''
+    k = ecc.ecdsa()
     k.generate()
     sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
     d[pk[:8]] = pk[8:] + sk
-    return mel + b' ' + pk
+    return pk + b'%45s' % mel
 
 def phone(db, ip, unik=False):
     """ 
@@ -363,6 +366,8 @@ def phone(db, ip, unik=False):
     p <num> <val> -> pay <num> body <val> amount of leaf
     h       -> display history for current body
     m       -> list all client ids (usually one if flag unik is True)
+    b       -> begin counting resource by object
+    e       -> end counting resource by object
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print ('IO Client (Phone)\nType ? for help')
@@ -370,7 +375,7 @@ def phone(db, ip, unik=False):
     while True:
         if my == b'': my = get_my('1')
         cmd, req, bmy = input('%s >' % my.decode('UTF-8')), b'', ecc.h2b(my)
-        if leaf.reg(re.match('(r|reg|register)\s*(\w{,20}@\w{,20}\.\w{,3})\s*$', cmd)): # 48
+        if leaf.reg(re.match('(r|reg|register)\s*(\w{2,20}@\w{2,20}\.\w{2,3})\s*$', cmd)): # 48
             with dbm.open(db, 'c') as d:
                 req = genkey(leaf.reg.v.group(2).encode('UTF-8'), unik, d)
         elif re.match('(v|verif|verification)\s*$', cmd): req = b'v'
@@ -423,14 +428,13 @@ def stop_access():
         
 def object(db, ip):
     ""
-    k = ecc.ecdsa()
-    t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    k, t = ecc.ecdsa(), socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print ('Intelligent Object (socket open)')
     with dbm.open(db, 'c') as d:
         if len(d.keys()) == 0:
             k.generate()
             sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
-            d[pk] = sk
+            d[b'KEYS'] = pk + sk
     t.bind((ip, PORT2))
     while True:
         (data, addr) = t.recvfrom(1024)
@@ -445,8 +449,13 @@ def object(db, ip):
             else:
                 t.sendto(b'error on signature', addr)
         elif len(data) == 4:
-            t.sendto(b'stop counting', addr)
-            print (' %d secondes' % int(time.time()-dat))
+            with dbm.open(db, 'c') as d:
+                print (' %d secondes' % int(time.time()-dat))
+                pk, sk = d[b'KEYS'][:48], d[b'KEYS'][48:]
+                k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
+                msg = b'invoice for %d secondes' % int(time.time()-dat)
+                cmd =  ecc.z85encode(k.sign(msg)) + msg
+                t.sendto(cmd, addr)
         else:
             t.sendto(b'error', addr)
         
