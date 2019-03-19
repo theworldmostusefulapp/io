@@ -3,7 +3,7 @@ Welcome to IO protocol !
 
 This is an Internet Disruptive innovation 
 
-![IO-protocol Main Diagram](./io_diagram.pdf)
+![IO-protocol Main Diagram](./diagram.png)
 
 ## Principles 
 
