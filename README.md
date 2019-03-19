@@ -3,6 +3,8 @@ Welcome to IO protocol !
 
 This is an Internet Disruptive innovation 
 
+![IO-protocol Main Diagram](./io_diagram.pdf?raw=true)
+
 ## Principles 
 
 This protocol works over UDP/IP (datagrams) Port 7800
@@ -56,6 +58,13 @@ On one or several another PCs or smartphones, launch a client with the server ad
 >python3 ioprotocol.py 192.168.25.20
 ```
 Then you can generate keys, request for certificate and pay
+
+To simulate a communication with an object, just add the -o option to create this object
+```
+>python3 ioprotocol.py -o 192.168.25.18
+```
+The object will automatically send invoices to the phone, that will forward to the server to make the object image.
+
 
 ## Contact
 

@@ -4,12 +4,12 @@
 IO-PROTOCOL over UDP/IP (client and server) v0.1
 
 1/ IO-PROTOCOL is between three parts:
-- Humans (represented by their smartphone)
-- Objects/Robots/IAs with a limited memory and only local (BLE,NFC) connection
-- Internet servers 
+- Humans (represented by their smartphone)                                -> 'phone'  proc
+- Objects/Robots/IAs (limited memory and only local (BLE,NFC) connection) -> 'object' proc
+- Internet servers                                                        -> 'server' proc
 
-An UDP socket on port 7800 links Human (client) and Internet  (server)
-An UDP socket on port 7801 links Human (client) and Object (resourcce)  
+An UDP socket on port 7800 links Human (client) and Internet (server)
+An UDP socket on port 7801 links Human (client) and Object   
 
 2/ IO DB FORMAT
 DBHEAD: 01:016 IO_VER(1)       : TOTAL_NC(8)  WEALTH(8)      
@@ -47,7 +47,7 @@ import readline # for command history
 #import torch
 #import subprocess
 
-s, k, MAXB = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ecc.ecdsa(), 1000
+MAXBAL = 1000 
 PORT1, PORT2 = 7800, 7801
 NS, ND, NC = 26, 142, 148
 
@@ -56,6 +56,7 @@ def verif(d):
     check certification !
     """
     print ('run check!')
+    k = ecc.ecdsa()
     if len(d.keys()) > 0 and ecc.v1 not in d:           return 0x01 # head does not exists 
     wc, wr, tc, tr, al = 0, 0, 0, 0, 0
 
@@ -100,6 +101,7 @@ def verif(d):
                     zx = ecc.b2h(src)
                     if zx not in d.keys():              return 0x0B # Error public key                    
                     msg, sig = src + dst + d[dx][8:-110], d[dx][-110:-14]
+                    k = ecc.ecdsa()
                     k.pt = k.uncompress(ecc.h2b(zx + d[zx]))
                     if not k.verify(sig, msg):          return 0x0C # bad signature
             # Hash
@@ -124,9 +126,10 @@ def verif(d):
                 if len(d[dx])   == ND: b += ecc.b2i(d[x + ecc.i2b(i+1, 4)][20:24])
                 elif len(d[dx]) == NS: b -= ecc.b2i(d[d[dx][:12]][20:24])
                 if b != ecc.b2s(d[dx][-14:-10], 4):     return 0x0F # bad balance
-    if wc != wr:                                        return 0x10 # bad wealth
-    if tc != tr:                                        return 0x11 # bad counter
-    if al != 0:                                         return 0x12 # bad money supply
+                if b < -MAXBAL or b > MAXBAL:           return 0x10 # Out of bounds
+    if wc != wr:                                        return 0x11 # bad wealth
+    if tc != tr:                                        return 0x12 # bad counter
+    if al != 0:                                         return 0x13 # bad money supply
     return 0 # Everythink ok !
 
 def balance(x, d):
@@ -138,6 +141,7 @@ def balance(x, d):
 def proof(x, d):
     ""
     if b'SERVER' in d.keys():
+        k = ecc.ecdsa()
         pk, sk = d[b'SERVER'][:48], d[b'SERVER'][48:]
         k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
         dat = ecc.datdecode(ecc.datencode()).encode('UTF-8')
@@ -172,7 +176,7 @@ def history(e, d):
     o.append(b'Balance: %6d' % balance(x, d) )
     return b'\n'.join(o)
 
-def lst(d):
+def list_humans(d):
     ""
     lu, lo = [x for x in d.keys() if len(x) == 16], []
     for p, i in enumerate(lu):
@@ -204,6 +208,7 @@ def invoice(e, d):
 def transaction(e, d):
     """
     """
+    k = ecc.ecdsa()
     src, dst, dat, lat, mnt, ref = e[:8], e[8:16], e[16:20], e[20:28], e[28:32], e[32:40]
     msg, sig, now = e[:-96], e[-96:], ecc.datint()
     if src not in d.keys() or dst not in d.keys() or src == dst:         return b'Error database'
@@ -213,7 +218,7 @@ def transaction(e, d):
     k.pt = k.uncompress(ecc.h2b(zx + d[zx]))
     if not k.verify(sig, msg):                                           return b'Error signature'    
     val, bals, bald = ecc.b2i(mnt), balance(src, d), balance(dst, d)
-    if val <= 0 or bals - val < -MAXB or bald + val > MAXB:              return b'Error value'
+    if val <= 0 or bals - val < -MAXBAL or bald + val > MAXBAL:          return b'Error value'
     os, od = ecc.b2i(d[src][:4]), ecc.b2i(d[dst][:4])
     ns, nd = os + 1, od + 1
     nhs = ecc.z10 if os == 0 else d[src + ecc.i2b(os, 4)][-10:]
@@ -241,6 +246,7 @@ def certificate(e, d):
     B->A if A(green)B(red)    then B(orange)
     A->B if A(green)B(orange) then B(green)
     """
+    k = ecc.ecdsa()
     src, dst, dat, lat, pld, ref = e[:8], e[8:16], e[16:20], e[20:28], e[28:38], e[38:46]
     msg, sig, now = e[:-96], e[-96:], ecc.datint()
     if ecc.b2i(dat) > now:                                             return b'future date'
@@ -277,6 +283,8 @@ def certificate(e, d):
 def server(db, ip):
     """ 
     """
+    k = ecc.ecdsa()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind((ip, PORT1))
     print ('IO-server on %s' % ip)
     with dbm.open(db, 'c') as d:
@@ -292,8 +300,10 @@ def server(db, ip):
     while True:
         (data, addr), o = s.recvfrom(1024), b''
         with dbm.open(db, 'c') as d:
-            if       data  == b'l': o = lst(d)
-            elif     data  == b's': o = server_id(d)
+            print (data)
+            if   data == b'v' and len(data) ==  1: o = b'Error %02X' % verif(d)
+            elif data == b'l' and len(data) ==  1: o = list_humans(d)
+            elif data == b's' and len(data) ==  1: o = server_id(d)
             elif leaf.reg(re.match(b'(\w{,20}@\w{,20}\.\w{,3})\s', data)):
                 mel = leaf.reg.v.group(1)
                 ky = data[len(mel)+1:]
@@ -305,9 +315,6 @@ def server(db, ip):
             elif len(data) ==  136: o = transaction(data, d)
             elif len(data) ==  142: o = certificate(data, d)
             elif len(data) >=  144 and len(data) <= 256: o = invoice(data, d)
-            elif     data  == b'v':
-                err = verif(d)
-                if err: o = ('ERROR %02X' % err).encode('UTF-8')
             else: o = b'command not found!'
             s.sendto(o, addr)
     
@@ -322,6 +329,7 @@ def get_my(sel):
 def gene(bmy, dst, pld, d):
     ""
     if bmy in d.keys():
+        k = ecc.ecdsa()
         pk, sk = bmy + d[bmy][:40], d[bmy][40:]
         k.pt, k.privkey = k.uncompress(pk), ecc.b2i(sk)
         msg = pk[:8] + dst + ecc.datencode() + ecc.z8 + pld + ecc.z8
@@ -331,6 +339,7 @@ def gene(bmy, dst, pld, d):
         return b''
 
 def genkey(mel, unik, d):
+    k = ecc.ecdsa()
     if len(d.keys()) > 0 and unik:
         print ('key already defined')
         return b''
@@ -339,7 +348,7 @@ def genkey(mel, unik, d):
     d[pk[:8]] = pk[8:] + sk
     return mel + b' ' + pk
 
-def client(db, ip, unik=False):
+def phone(db, ip, unik=False):
     """ 
     IO CLIENT:
     Simulate smart-phone with strong authentication 
@@ -355,12 +364,13 @@ def client(db, ip, unik=False):
     h       -> display history for current body
     m       -> list all client ids (usually one if flag unik is True)
     """
-    print ('IO Client\nType ? for help')
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print ('IO Client (Phone)\nType ? for help')
     my = b''
     while True:
         if my == b'': my = get_my('1')
         cmd, req, bmy = input('%s >' % my.decode('UTF-8')), b'', ecc.h2b(my)
-        if leaf.reg(re.match('(r|reg|register)\s*(\w+@\w+\.\w+)\s*$', cmd)): # 48
+        if leaf.reg(re.match('(r|reg|register)\s*(\w{,20}@\w{,20}\.\w{,3})\s*$', cmd)): # 48
             with dbm.open(db, 'c') as d:
                 req = genkey(leaf.reg.v.group(2).encode('UTF-8'), unik, d)
         elif re.match('(v|verif|verification)\s*$', cmd): req = b'v'
@@ -368,7 +378,7 @@ def client(db, ip, unik=False):
         elif re.match('(s|server)\s*$',             cmd): req = b's'
         elif re.match('(h|hist|history)\s*$',       cmd): req = my
         elif re.match('(o|proof)\s*$',              cmd): req = bmy
-        elif re.match('(\?|help)\s*$',              cmd): req = b''; print (__doc__, client.__doc__)
+        elif re.match('(\?|help)\s*$',              cmd): req = b''; print (__doc__, phone.__doc__)
         elif re.match('(b|begin|start)\s*$',        cmd): req = b''; start_access()
         elif re.match('(e|end|stop)\s*$',           cmd): req = b''; stop_access()
         elif leaf.reg(re.match('(my|)\s*(\d{1,2})\s*$', cmd)): my = get_my(leaf.reg.v.group(2))
@@ -391,45 +401,10 @@ def client(db, ip, unik=False):
             data, addr = s.recvfrom(2048)
             if data:
                 print (data.decode('UTF-8'))
-                if req == b'l':
-                    with open('lpub', 'w') as f: f.write(data.decode('UTF-8'))
-                if req == bmy:
+                if   req == b'l':
+                    with open('lpub',  'w') as f: f.write(data.decode('UTF-8'))
+                elif req == bmy:
                     with open('proof', 'w') as f: f.write(data.decode('UTF-8'))
-
-def access_tcp():
-    ""
-    sr = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    with open('proof') as f: pr = f.read()
-    sr.connect((leaf.ip(), PORT2))
-    sr.send(pr.encode('UTF-8'))
-    #data = sr.recv(2048)
-    #if data: print (data.decode('UTF-8'))
-
-        
-def resource_tcp(db, ip):
-    ""
-    sr = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print ('Intelligent Object')
-    with dbm.open(db, 'c') as d:
-        if len(d.keys()) == 0:
-            k.generate()
-            sk, pk = ecc.i2b(k.privkey, 48), k.compress(k.pt)
-            d[pk] = sk
-    sr.bind((ip, PORT2))
-    while True:
-        sr.listen(5)
-        cli, addr = sr.accept()
-        data = cli.recv(1024)
-        sig, msg = ecc.z85decode(data[:120]), data[120:]
-        with open('server_pk') as f: pk = f.read()
-        k.pt = k.uncompress(ecc.z85decode(pk.encode('UTF-8')))
-        if k.verify(sig, msg):
-            print ('ok')
-            #sr.send(b'ok')
-            #start time counting
-        else:
-            print ('ko')
-            #sr.send(b'bad signature')
 
 def start_access():
     ""
@@ -445,10 +420,10 @@ def stop_access():
     t.sendto(b'stop', (leaf.ip(), PORT2))
     data, addr = t.recvfrom(2048)
     if data: print (data.decode('UTF-8'))
-    
         
-def resource(db, ip):
+def object(db, ip):
     ""
+    k = ecc.ecdsa()
     t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print ('Intelligent Object (socket open)')
     with dbm.open(db, 'c') as d:
@@ -477,9 +452,9 @@ def resource(db, ip):
         
 if __name__ == "__main__":
     if   len(sys.argv) == 3:
-        resource('mem', sys.argv[2])
+        object('mem', sys.argv[2])
     elif len(sys.argv) == 2:
-        client('local', sys.argv[1], False)
+        phone('local', sys.argv[1], False)
     else:
         server('base', leaf.ip())
     
